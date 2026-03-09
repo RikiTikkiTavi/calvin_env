@@ -139,7 +139,10 @@ def get_egl_device_id(cuda_id: int) -> Union[int]:
             # In case EGL_options.o has to be built and multiprocessing is used, give rank 0 process time to build
             time.sleep(5)
     result = subprocess.run(["./EGL_options.o"], capture_output=True, cwd=dir_path)
-    n = int(result.stderr.decode("utf-8").split(" of ")[1].split(".")[0])
+    print(result)
+    #n = int(result.stderr.decode("utf-8").split(" of ")[1].split(".")[0])
+    # EGL device choice: 0 of 1 (from EGL_VISIBLE_DEVICE)
+    n = int(re.search(r"of\s+([0-9]+)", result.stderr.decode("utf-8")).group(1))
     for egl_id in range(n):
         my_env = os.environ.copy()
         my_env["EGL_VISIBLE_DEVICE"] = str(egl_id)
