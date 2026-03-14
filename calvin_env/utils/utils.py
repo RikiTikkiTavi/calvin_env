@@ -124,12 +124,35 @@ class EglDeviceNotFoundError(Exception):
 
 
 def get_egl_device_id(cuda_id: int) -> Union[int]:
-    """
+    """Map a virtual CUDA device index to the corresponding EGL device index.
+
+    SLURM (and other launchers) set ``CUDA_VISIBLE_DEVICES`` to restrict which
+    physical GPUs a process can see, remapping them to virtual indices starting
+    at 0.  ``EGL_CUDA_DEVICE_NV`` in ``EGL_options.o`` returns the *physical*
+    CUDA device index, so comparing it directly to the virtual ``cuda_id``
+    gives a wrong match when ``CUDA_VISIBLE_DEVICES`` is set.
+
+    This function translates ``cuda_id`` (virtual) to the physical device index
+    before probing, so that the comparison is always apples-to-apples.
+
     >>> i = get_egl_device_id(0)
     >>> isinstance(i, int)
     True
     """
     assert isinstance(cuda_id, int), "cuda_id has to be integer"
+
+    # Resolve virtual cuda_id → physical device index.
+    # CUDA_VISIBLE_DEVICES="2,3" means virtual 0 → physical 2, virtual 1 → physical 3.
+    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if cuda_visible:
+        physical_ids = [int(x) for x in cuda_visible.split(",")]
+        assert cuda_id < len(physical_ids), (
+            f"cuda_id={cuda_id} out of range for CUDA_VISIBLE_DEVICES={cuda_visible!r}"
+        )
+        physical_cuda_id = physical_ids[cuda_id]
+    else:
+        physical_cuda_id = cuda_id
+
     dir_path = Path(__file__).absolute().parents[2] / "egl_check"
     if not os.path.isfile(dir_path / "EGL_options.o"):
         if os.environ.get("LOCAL_RANK", "0") == "0":
@@ -140,7 +163,6 @@ def get_egl_device_id(cuda_id: int) -> Union[int]:
             time.sleep(5)
     result = subprocess.run(["./EGL_options.o"], capture_output=True, cwd=dir_path)
     print(result)
-    #n = int(result.stderr.decode("utf-8").split(" of ")[1].split(".")[0])
     # EGL device choice: 0 of 1 (from EGL_VISIBLE_DEVICE)
     n = int(re.search(r"of\s+([0-9]+)", result.stderr.decode("utf-8")).group(1))
     for egl_id in range(n):
@@ -150,7 +172,8 @@ def get_egl_device_id(cuda_id: int) -> Union[int]:
         match = re.search(r"CUDA_DEVICE=[0-9]+", result.stdout.decode("utf-8"))
         if match:
             current_cuda_id = int(match[0].split("=")[1])
-            if cuda_id == current_cuda_id:
+            # Compare physical indices: EGL_CUDA_DEVICE_NV returns physical device ID.
+            if physical_cuda_id == current_cuda_id:
                 return egl_id
     raise EglDeviceNotFoundError
 
